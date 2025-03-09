@@ -7,6 +7,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 const (
@@ -17,6 +21,7 @@ const (
 // server is a simple HTTP server that forwards requests to a backend.
 type server struct {
 	forward string
+	srv     *http.Server
 }
 
 // Serve forwards the request to the backend and copies the response back to the client.
@@ -84,11 +89,38 @@ func main() {
 
 	log.Printf("listening on %s, forwarding to %s", *listen, *forward)
 
-	_, err := setupOTelSDK(context.Background())
+	otelShutdown, err := setupOTelSDK(context.Background())
 	if err != nil {
 		log.Fatalf("failed to setup OpenTelemetry SDK: %v", err)
 	}
 
 	s := &server{forward: *forward}
-	log.Fatal(http.ListenAndServe(*listen, http.HandlerFunc(s.Serve)))
+	s.srv = &http.Server{
+		Addr:           *listen,
+		Handler:        http.HandlerFunc(s.Serve),
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Fatal(s.srv.ListenAndServe())
+	}()
+
+	<-done
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer func() {
+		cancel()
+		otelShutdown()
+	}()
+
+	err = s.srv.Shutdown(ctx)
+	if err != nil {
+		log.Fatalf("failed to shutdown server: %v", err)
+	}
 }
