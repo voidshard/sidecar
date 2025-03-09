@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app *.go && chown -R $USER_UID:$USER_G
 FROM scratch
 
 COPY --from=build /etc/passwd /etc/passwd
-COPY --from=build /totp /totp
+COPY --from=build /app /app
 COPY --from=build /etc/ssl/certs/ /etc/ssl/certs/
 
 USER $USERNAME
